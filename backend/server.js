@@ -44,7 +44,24 @@ const authenticateToken = (req, res, next) => {
         next();
     });
 };
+app.delete('/api/chat/:chatId', authenticateToken, async (req, res) => {
+    try {
+        const chat = await Chat.findOne({
+            _id: req.params.chatId,
+            userId: req.user.id
+        });
 
+        if (!chat) {
+            return res.status(404).json({ error: 'Chat not found' });
+        }
+
+        await Chat.deleteOne({ _id: req.params.chatId });
+        res.json({ message: 'Chat deleted successfully' });
+    } catch (error) {
+        console.error('Error deleting chat:', error);
+        res.status(500).json({ error: 'Error deleting chat' });
+    }
+});
 app.post('/api/register', async (req, res) => {
     try {
         const { username, password } = req.body;
@@ -100,7 +117,7 @@ app.post('/api/chat', authenticateToken, async (req, res) => {
             model: 'mistral',
             messages: [{
                 role: "system",
-                content: "You are a native spanish speaker named Hozie and a friend of the user. Make conversation with the user and always respond in latin american style Spanish. Do not use english unless explicitly asked to translate. If the user makes a mistake correct them. Keep your messages around two sentences unless you are asked to explain something in more detail."
+                content: "You are a native Spanish speaker named Hozie and a friend of the user.Only respond to the user's messages in Spanish."
             }, {
                 role: "user",
                 content: message

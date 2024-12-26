@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { MessageCircle, LogOut, Plus, Send } from 'lucide-react';
+import { MessageCircle, LogOut, Plus, Send, Trash2 } from 'lucide-react';
 
 const SpanishPracticeChat = () => {
   const [messages, setMessages] = useState([]);
@@ -104,7 +104,6 @@ const SpanishPracticeChat = () => {
       flexDirection: 'column',
       height: '100%',
     },
-
     messagesContainer: {
       flex: 1,
       overflowY: 'auto',
@@ -139,6 +138,41 @@ const SpanishPracticeChat = () => {
       fontSize: '1rem',
       outline: 'none',
       transition: 'border-color 0.2s',
+    }
+  };
+  const deleteButton = {
+    ...styles.button,
+    padding: '0.5rem',
+    backgroundColor: 'transparent',
+    color: colors.danger,
+    opacity: 0.7,
+    ':hover': {
+      opacity: 1,
+    }
+  };
+  const chatItem = {
+    ...styles.chatItem,
+    justifyContent: 'space-between',
+  };
+  const handleDeleteChat = async (chatId, e) => {
+    e.stopPropagation();
+    try {
+      const response = await fetch(`http://localhost:3001/api/chat/${chatId}`, {
+        method: 'DELETE',
+        headers: {
+          'Authorization': `Bearer ${localStorage.getItem('token')}`
+        }
+      });
+
+      if (response.ok) {
+        if (currentChatId === chatId) {
+          setCurrentChatId(null);
+          setMessages([]);
+        }
+        fetchChats();
+      }
+    } catch (error) {
+      console.error('Error deleting chat:', error);
     }
   };
 
@@ -364,13 +398,22 @@ const SpanishPracticeChat = () => {
                   setMessages(chat.messages);
                 }}
                 style={{
-                  ...styles.chatItem,
+                  ...chatItem,
                   backgroundColor: currentChatId === chat._id ? colors.primary + '15' : 'transparent',
                   color: currentChatId === chat._id ? colors.primary : colors.text,
                 }}
               >
-                <MessageCircle size={18} />
-                <span>Chat {new Date(chat.createdAt).toLocaleDateString()}</span>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                  <MessageCircle size={18} />
+                  <span>Chat {new Date(chat.createdAt).toLocaleDateString()}</span>
+                </div>
+                <button
+                  onClick={(e) => handleDeleteChat(chat._id, e)}
+                  style={deleteButton}
+                  title="Delete chat"
+                >
+                  <Trash2 size={18} />
+                </button>
               </div>
             ))}
           </div>
