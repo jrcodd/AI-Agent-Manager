@@ -1,4 +1,4 @@
-A Website where you can create your own ai assistent
+A Website where you can create your own ai agent
 Uses react.js, mongodb, and ollama's library of open source models
 
 to use:
