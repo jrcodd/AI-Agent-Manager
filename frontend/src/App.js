@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { MessageCircle, LogOut, Plus, Send, Trash2 } from 'lucide-react';
 
-const SpanishPracticeChat = () => {
+const AiChatApp = () => {
   const [messages, setMessages] = useState([]);
   const [inputText, setInputText] = useState('');
   const [isLoading, setIsLoading] = useState(false);
@@ -10,6 +10,17 @@ const SpanishPracticeChat = () => {
   const [password, setPassword] = useState('');
   const [chats, setChats] = useState([]);
   const [currentChatId, setCurrentChatId] = useState(null);
+
+  const [models, setModels] = useState([]);
+  const [currentModelId, setCurrentModelId] = useState(null);
+  const [newModelName, setNewModelName] = useState('');
+  const [newModelModel, setNewModelModel] = useState('');
+  const [newModelSystemPrompt, setNewModelSystemPrompt] = useState('');
+  const [isAddModelModalOpen, setIsAddModelModalOpen] = useState(false);
+  const [showDownloadModal, setShowDownloadModal] = useState(false);
+  const [modelToDownload, setModelToDownload] = useState(null);
+  const [downloadProgress, setDownloadProgress] = useState(0);
+  const [isDownloading, setIsDownloading] = useState(false);
 
   const colors = {
     primary: '#7C3AED',
@@ -106,9 +117,10 @@ const SpanishPracticeChat = () => {
     },
     messagesContainer: {
       flex: 1,
-      overflowY: 'auto',
+      overflowY: 'auto', // Enable vertical scrolling
       padding: '1.5rem',
       backgroundColor: colors.background,
+      maxHeight: 'calc(100vh - 200px)', // Set a max height to ensure scrolling works
     },
 
     inputArea: {
@@ -138,8 +150,39 @@ const SpanishPracticeChat = () => {
       fontSize: '1rem',
       outline: 'none',
       transition: 'border-color 0.2s',
+    },
+
+    progressBar: {
+      width: '100%',
+      height: '10px',
+      backgroundColor: colors.lightGray,
+      borderRadius: '5px',
+      marginTop: '1rem',
+      overflow: 'hidden',
+    },
+
+    progressBarFill: {
+      height: '100%',
+      backgroundColor: colors.primary,
+      borderRadius: '5px',
+      transition: 'width 0.3s ease',
     }
   };
+
+  const fetchModels = async () => {
+    try {
+      const response = await fetch('http://localhost:3001/api/models', {
+        headers: {
+          'Authorization': `Bearer ${localStorage.getItem('token')}`
+        }
+      });
+      const data = await response.json();
+      setModels(data);
+    } catch (error) {
+      console.error('Error fetching models:', error);
+    }
+  };
+
   const deleteButton = {
     ...styles.button,
     padding: '0.5rem',
@@ -192,6 +235,7 @@ const SpanishPracticeChat = () => {
     if (token) {
       setIsLoggedIn(true);
       fetchChats();
+      fetchModels();
     }
   }, []);
 
@@ -256,12 +300,77 @@ const SpanishPracticeChat = () => {
     }
   };
 
+  const checkModelInstalled = async (modelName) => {
+    try {
+      const response = await fetch('http://localhost:11434/api/tags');
+      const data = await response.json();
+      const installedModels = data.models.map(model => model.name);
+      return installedModels.includes(modelName);
+    } catch (error) {
+      console.error('Error checking model installation:', error);
+      return false;
+    }
+  };
+
+  const downloadModel = async (modelName) => {
+    setIsDownloading(true);
+    setDownloadProgress(0);
+
+    try {
+      const response = await fetch('http://localhost:11434/api/pull', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: modelName, stream: true })
+      });
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let progress = 0;
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        const chunk = decoder.decode(value);
+        const lines = chunk.split('\n').filter(line => line.trim() !== '');
+
+        for (const line of lines) {
+          const data = JSON.parse(line);
+          if (data.status === 'downloading') {
+            progress = data.completed / data.total;
+            setDownloadProgress(progress * 100);
+          }
+        }
+      }
+
+      setIsDownloading(false);
+      setShowDownloadModal(false);
+      setModelToDownload(null);
+    } catch (error) {
+      console.error('Error downloading model:', error);
+      setIsDownloading(false);
+    }
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
-    if (!inputText.trim() || isLoading) return;
+    if (!inputText.trim() || isLoading || !currentModelId) return;
 
     setIsLoading(true);
     try {
+      const aiModel = models.find(model => model._id === currentModelId);
+      if (!aiModel) {
+        throw new Error('AI model not found');
+      }
+
+      const isInstalled = await checkModelInstalled(aiModel.modelName);
+      if (!isInstalled) {
+        setModelToDownload(aiModel.modelName);
+        setShowDownloadModal(true);
+        setIsLoading(false);
+        return;
+      }
+
       const response = await fetch('http://localhost:3001/api/chat', {
         method: 'POST',
         headers: {
@@ -270,7 +379,8 @@ const SpanishPracticeChat = () => {
         },
         body: JSON.stringify({
           message: inputText,
-          chatId: currentChatId
+          chatId: currentChatId,
+          modelId: currentModelId
         })
       });
 
@@ -291,6 +401,264 @@ const SpanishPracticeChat = () => {
     } finally {
       setIsLoading(false);
     }
+  };
+
+  const handleDownloadModel = async () => {
+    await downloadModel(modelToDownload);
+  };
+
+  const handleCreateModel = async (e) => {
+    e.preventDefault();
+    try {
+      const response = await fetch('http://localhost:3001/api/models', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${localStorage.getItem('token')}`
+        },
+        body: JSON.stringify({
+          name: newModelName,
+          modelName: newModelModel,
+          systemPrompt: newModelSystemPrompt
+        })
+      });
+      const newModel = await response.json();
+      setModels(prev => [...prev, newModel]);
+      setIsAddModelModalOpen(false);
+      setNewModelName('');
+      setNewModelModel('');
+      setNewModelSystemPrompt('');
+    } catch (error) {
+      console.error('Error creating model:', error);
+    }
+  };
+
+  const handleDeleteModel = async (modelId) => {
+    try {
+      await fetch(`http://localhost:3001/api/models/${modelId}`, {
+        method: 'DELETE',
+        headers: {
+          'Authorization': `Bearer ${localStorage.getItem('token')}`
+        }
+      });
+      setModels(prev => prev.filter(model => model._id !== modelId));
+      if (currentModelId === modelId) {
+        setCurrentModelId(null);
+        setMessages([]);
+      }
+    } catch (error) {
+      console.error('Error deleting model:', error);
+    }
+  };
+
+  const renderSidebar = () => (
+    <div style={styles.sidebar}>
+      <div style={styles.sidebarHeader}>
+        <button
+          onClick={() => {
+            setCurrentChatId(null);
+            setMessages([]);
+          }}
+          style={{
+            ...styles.button,
+            backgroundColor: colors.primary,
+            color: colors.white,
+            width: '100%',
+          }}
+        >
+          <Plus size={18} />
+          New Chat
+        </button>
+        <button
+          onClick={() => setIsAddModelModalOpen(true)}
+          style={{
+            ...styles.button,
+            backgroundColor: colors.success,
+            color: colors.white,
+            width: '100%',
+            marginTop: '0.5rem'
+          }}
+        >
+          <Plus size={18} />
+          Add AI Model
+        </button>
+      </div>
+      <div style={styles.chatsList}>
+        <h3 style={{ padding: '0 1rem', color: colors.text }}>AI Models</h3>
+        {models.map(model => (
+          <div
+            key={model._id}
+            onClick={() => {
+              setCurrentModelId(model._id);
+              setCurrentChatId(null);
+              setMessages([]);
+            }}
+            style={{
+              ...chatItem,
+              backgroundColor: currentModelId === model._id ? colors.primary + '15' : 'transparent',
+              color: currentModelId === model._id ? colors.primary : colors.text,
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+              <MessageCircle size={18} />
+              <span>{model.name}</span>
+            </div>
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                handleDeleteModel(model._id);
+              }}
+              style={deleteButton}
+              title="Delete model"
+            >
+              <Trash2 size={18} />
+            </button>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+
+  const renderAddModelModal = () => {
+    if (!isAddModelModalOpen) return null;
+
+    return (
+      <div style={{
+        position: 'fixed',
+        top: 0,
+        left: 0,
+        width: '100%',
+        height: '100%',
+        backgroundColor: 'rgba(0,0,0,0.5)',
+        display: 'flex',
+        justifyContent: 'center',
+        alignItems: 'center',
+        zIndex: 1000
+      }}>
+        <div style={{
+          ...styles.loginCard,
+          width: '500px',
+          maxHeight: '90%',
+          overflowY: 'auto'
+        }}>
+          <h2 style={{ marginBottom: '1rem', color: colors.text }}>Add New AI Model</h2>
+          <form onSubmit={handleCreateModel}>
+            <input
+              type="text"
+              placeholder="Model Name"
+              style={styles.input}
+              value={newModelName}
+              onChange={(e) => setNewModelName(e.target.value)}
+              required
+            />
+            <input
+              type="text"
+              placeholder="Ollama Model Name (e.g., mistral, llama2)"
+              style={styles.input}
+              value={newModelModel}
+              onChange={(e) => setNewModelModel(e.target.value)}
+              required
+            />
+            <textarea
+              placeholder="System Prompt (Optional)"
+              style={{
+                ...styles.input,
+                minHeight: '100px',
+                resize: 'vertical'
+              }}
+              value={newModelSystemPrompt}
+              onChange={(e) => setNewModelSystemPrompt(e.target.value)}
+            />
+            <div style={{ display: 'flex', gap: '1rem' }}>
+              <button
+                type="submit"
+                style={{
+                  ...styles.button,
+                  backgroundColor: colors.primary,
+                  color: colors.white,
+                  flex: 1,
+                }}
+              >
+                Create Model
+              </button>
+              <button
+                type="button"
+                onClick={() => setIsAddModelModalOpen(false)}
+                style={{
+                  ...styles.button,
+                  backgroundColor: colors.lightGray,
+                  color: colors.text,
+                  flex: 1,
+                }}
+              >
+                Cancel
+              </button>
+            </div>
+          </form>
+        </div>
+      </div>
+    );
+  };
+
+  const renderDownloadModal = () => {
+    if (!showDownloadModal) return null;
+
+    return (
+      <div style={{
+        position: 'fixed',
+        top: 0,
+        left: 0,
+        width: '100%',
+        height: '100%',
+        backgroundColor: 'rgba(0,0,0,0.5)',
+        display: 'flex',
+        justifyContent: 'center',
+        alignItems: 'center',
+        zIndex: 1000
+      }}>
+        <div style={{
+          ...styles.loginCard,
+          width: '500px',
+          maxHeight: '90%',
+          overflowY: 'auto'
+        }}>
+          <h2 style={{ marginBottom: '1rem', color: colors.text }}>Download Model</h2>
+          <p style={{ marginBottom: '1rem', color: colors.text }}>
+            The model "{modelToDownload}" is not installed. Do you want to download it now?
+          </p>
+          <div style={styles.progressBar}>
+            <div style={{ ...styles.progressBarFill, width: `${downloadProgress}%` }} />
+          </div>
+          <div style={{ display: 'flex', gap: '1rem', marginTop: '1rem' }}>
+            <button
+              onClick={handleDownloadModel}
+              style={{
+                ...styles.button,
+                backgroundColor: colors.primary,
+                color: colors.white,
+                flex: 1,
+                opacity: isDownloading ? 0.7 : 1,
+              }}
+              disabled={isDownloading}
+            >
+              {isDownloading ? 'Downloading...' : 'Download'}
+            </button>
+            <button
+              onClick={() => setShowDownloadModal(false)}
+              style={{
+                ...styles.button,
+                backgroundColor: colors.lightGray,
+                color: colors.text,
+                flex: 1,
+              }}
+              disabled={isDownloading}
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      </div>
+    );
   };
 
   if (!isLoggedIn) {
@@ -353,128 +721,156 @@ const SpanishPracticeChat = () => {
 
   return (
     <div style={styles.appContainer}>
-      <header style={styles.header}>
-        <h1 style={{ fontSize: '1.5rem', fontWeight: '600', color: colors.text }}>
-          Spanish Practice Chat
-        </h1>
-        <button
-          onClick={handleLogout}
-          style={{
-            ...styles.button,
-            backgroundColor: colors.danger,
-            color: colors.white,
-          }}
-        >
-          <LogOut size={18} />
-          Logout
-        </button>
-      </header>
-
-      <div style={styles.mainContent}>
-        <div style={styles.sidebar}>
-          <div style={styles.sidebarHeader}>
-            <button
-              onClick={() => {
-                setCurrentChatId(null);
-                setMessages([]);
-              }}
-              style={{
-                ...styles.button,
-                backgroundColor: colors.primary,
-                color: colors.white,
-                width: '100%',
-              }}
-            >
-              <Plus size={18} />
-              New Chat
-            </button>
-          </div>
-          <div style={styles.chatsList}>
-            {chats.map(chat => (
-              <div
-                key={chat._id}
-                onClick={() => {
-                  setCurrentChatId(chat._id);
-                  setMessages(chat.messages);
-                }}
-                style={{
-                  ...chatItem,
-                  backgroundColor: currentChatId === chat._id ? colors.primary + '15' : 'transparent',
-                  color: currentChatId === chat._id ? colors.primary : colors.text,
-                }}
-              >
-                <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-                  <MessageCircle size={18} />
-                  <span>Chat {new Date(chat.createdAt).toLocaleDateString()}</span>
-                </div>
-                <button
-                  onClick={(e) => handleDeleteChat(chat._id, e)}
-                  style={deleteButton}
-                  title="Delete chat"
-                >
-                  <Trash2 size={18} />
-                </button>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        <div style={styles.chatArea}>
-          <div style={styles.messagesContainer}>
-            {messages.map((message, index) => (
-              <div
-                key={index}
-                style={{
-                  display: 'flex',
-                  flexDirection: 'column',
-                }}
-              >
-                <div style={messageBubble(message.isAi)}>
-                  {message.text}
-                </div>
-              </div>
-            ))}
-          </div>
-
-          <div style={styles.inputArea}>
-            <form
-              onSubmit={handleSubmit}
-              style={{
-                display: 'flex',
-                gap: '1rem',
-              }}
-            >
+      {!isLoggedIn ? (
+        <div style={styles.loginPage}>
+          <div style={styles.loginCard}>
+            <h1 style={{
+              fontSize: '1.875rem',
+              fontWeight: '700',
+              color: colors.text,
+              marginBottom: '2rem',
+              textAlign: 'center'
+            }}>
+              Welcome to AI Chat
+            </h1>
+            <form onSubmit={handleLogin}>
               <input
                 type="text"
-                value={inputText}
-                onChange={(e) => setInputText(e.target.value)}
-                style={{
-                  ...styles.input,
-                  marginBottom: 0,
-                  flex: 1,
-                }}
-                placeholder="Escribes tu mensaje aqui..."
-                disabled={isLoading}
+                placeholder="Username"
+                style={styles.input}
+                value={username}
+                onChange={(e) => setUsername(e.target.value)}
               />
-              <button
-                type="enviar"
-                style={{
-                  ...styles.button,
-                  backgroundColor: colors.primary,
-                  color: colors.white,
-                  opacity: isLoading ? 0.7 : 1,
-                }}
-                disabled={isLoading}
-              >
-                <Send size={18} />
-                {isLoading ? 'enviando...' : 'Enviar'}
-              </button>
+              <input
+                type="password"
+                placeholder="Password"
+                style={styles.input}
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+              />
+              <div style={{ display: 'flex', gap: '1rem' }}>
+                <button
+                  type="submit"
+                  style={{
+                    ...styles.button,
+                    backgroundColor: colors.primary,
+                    color: colors.white,
+                    flex: 1,
+                  }}
+                >
+                  Login
+                </button>
+                <button
+                  onClick={handleRegister}
+                  style={{
+                    ...styles.button,
+                    backgroundColor: colors.success,
+                    color: colors.white,
+                    flex: 1,
+                  }}
+                >
+                  Register
+                </button>
+              </div>
             </form>
           </div>
         </div>
-      </div>
+      ) : (
+        <>
+          <header style={styles.header}>
+            <h1 style={{ fontSize: '1.5rem', fontWeight: '600', color: colors.text }}>
+              AI Chat
+            </h1>
+            <button
+              onClick={handleLogout}
+              style={{
+                ...styles.button,
+                backgroundColor: colors.danger,
+                color: colors.white,
+              }}
+            >
+              <LogOut size={18} />
+              Logout
+            </button>
+          </header>
+  
+          <div style={styles.mainContent}>
+            {renderSidebar()}
+  
+            {!currentModelId ? (
+              <div style={{
+                display: 'flex',
+                justifyContent: 'center',
+                alignItems: 'center',
+                flex: 1,
+                backgroundColor: colors.background
+              }}>
+                <p style={{ color: colors.gray }}>
+                  Please select or create an AI model to start chatting
+                </p>
+              </div>
+            ) : (
+              <div style={styles.chatArea}>
+                <div style={styles.messagesContainer}>
+                  {messages.map((message, index) => (
+                    <div
+                      key={index}
+                      style={{
+                        display: 'flex',
+                        flexDirection: 'column',
+                      }}
+                    >
+                      <div style={messageBubble(message.isAi)}>
+                        {message.text}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+  
+                <div style={styles.inputArea}>
+                  <form
+                    onSubmit={handleSubmit}
+                    style={{
+                      display: 'flex',
+                      gap: '1rem',
+                    }}
+                  >
+                    <input
+                      type="text"
+                      value={inputText}
+                      onChange={(e) => setInputText(e.target.value)}
+                      style={{
+                        ...styles.input,
+                        marginBottom: 0,
+                        flex: 1,
+                      }}
+                      placeholder="Type your message..."
+                      disabled={isLoading}
+                    />
+                    <button
+                      type="submit"
+                      style={{
+                        ...styles.button,
+                        backgroundColor: colors.primary,
+                        color: colors.white,
+                        opacity: isLoading ? 0.7 : 1,
+                      }}
+                      disabled={isLoading}
+                    >
+                      <Send size={18} />
+                      {isLoading ? 'Sending...' : 'Send'}
+                    </button>
+                  </form>
+                </div>
+              </div>
+            )}
+          </div>
+  
+          {isAddModelModalOpen && renderAddModelModal()}
+          {renderDownloadModal()}
+        </>
+      )}
     </div>
   );
 };
-
-export default SpanishPracticeChat;
+export default AiChatApp;

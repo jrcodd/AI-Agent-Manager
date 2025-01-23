@@ -9,7 +9,7 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-mongoose.connect('mongodb://localhost:27017/spanish-chat', {
+mongoose.connect('mongodb://localhost:27017/ai-chat', {
     useNewUrlParser: true,
     useUnifiedTopology: true
 });
@@ -44,6 +44,16 @@ const authenticateToken = (req, res, next) => {
         next();
     });
 };
+
+const AiModelSchema = new mongoose.Schema({
+    name: { type: String, required: true, unique: true },
+    modelName: { type: String, required: true },
+    systemPrompt: { type: String, default: 'You are a helpful AI assistant.' },
+    userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true }
+});
+
+const AiModel = mongoose.model('AiModel', AiModelSchema);
+
 app.delete('/api/chat/:chatId', authenticateToken, async (req, res) => {
     try {
         const chat = await Chat.findOne({
@@ -62,6 +72,7 @@ app.delete('/api/chat/:chatId', authenticateToken, async (req, res) => {
         res.status(500).json({ error: 'Error deleting chat' });
     }
 });
+
 app.post('/api/register', async (req, res) => {
     try {
         const { username, password } = req.body;
@@ -99,8 +110,14 @@ app.get('/api/chats', authenticateToken, async (req, res) => {
 
 app.post('/api/chat', authenticateToken, async (req, res) => {
     try {
-        const { message, chatId } = req.body;
+        const { message, chatId, modelId } = req.body;
         let chat;
+        let aiModel;
+
+        aiModel = await AiModel.findById(modelId);
+        if (!aiModel) {
+            return res.status(404).json({ error: 'AI model not found' });
+        }
 
         if (chatId) {
             chat = await Chat.findById(chatId);
@@ -114,10 +131,10 @@ app.post('/api/chat', authenticateToken, async (req, res) => {
         });
 
         const response = await axios.post('http://localhost:11434/api/chat', {
-            model: 'mistral',
+            model: aiModel.modelName,
             messages: [{
                 role: "system",
-                content: "You are a native Spanish speaker named Hozie and a friend of the user.Only respond to the user's messages in Spanish."
+                content: aiModel.systemPrompt
             }, {
                 role: "user",
                 content: message
@@ -138,6 +155,43 @@ app.post('/api/chat', authenticateToken, async (req, res) => {
     } catch (error) {
         console.error('Error:', error);
         res.status(500).json({ error: 'Failed to get response from AI' });
+    }
+});
+
+app.post('/api/models', authenticateToken, async (req, res) => {
+    try {
+        const { name, modelName, systemPrompt } = req.body;
+        const aiModel = new AiModel({
+            name,
+            modelName,
+            systemPrompt,
+            userId: req.user.id
+        })
+        await aiModel.save();
+        res.status(201).json(aiModel);
+    } catch (error) {
+        res.status(500).json({error: 'Error creating AI model'});
+    }
+});
+
+app.get('/api/models', authenticateToken, async (req, res) => {
+    try {
+        const models = await AiModel.find({ userId: req.user.id });
+        res.json(models);
+    } catch (error) {
+        res.status(500).json({ error: 'Error fetching AI models' });
+    }
+});
+
+app.delete('/api/models/:modelId', authenticateToken, async (req, res) => {
+    try {
+        await AiModel.findOneAndDelete({
+            _id: req.params.modelId,
+            userId: req.user.id
+        });
+        res.json({ message: 'Model deleted successfully' });
+    } catch (error) {
+        res.status(500).json({ error: 'Error deleting AI model' });
     }
 });
 
